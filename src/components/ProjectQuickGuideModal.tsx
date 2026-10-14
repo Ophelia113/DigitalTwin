@@ -38,7 +38,7 @@ export const ProjectQuickGuideModal: React.FC<ProjectQuickGuideModalProps> = ({
                 How This Digital Twin Works (Quick 30-Second Guide)
               </h3>
               <p className="text-xs text-slate-400">
-                Simple overview for project demonstration and viva evaluation
+                Simple overview for process monitoring and system evaluation
               </p>
             </div>
           </div>

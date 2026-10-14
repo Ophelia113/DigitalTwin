@@ -25,6 +25,12 @@ export class TelemetryService {
   private wsConnection: WebSocket | null = null;
   private simulationIntervalId: number | null = null;
 
+  // Web Serial API (Direct USB connection to ESP32 without backend)
+  private serialPort: any = null;
+  private serialReader: any = null;
+  private isSerialReading: boolean = false;
+  private serialPortInfo: string | null = null;
+
   // History buffer (rolling 60 points)
   private history: TelemetryPoint[] = [];
   private maxHistoryLength = 60;
@@ -39,22 +45,22 @@ export class TelemetryService {
     ultrasonic_baseline_cm: 24.5,
   };
 
-  // Current State
-  private currentMotorState: MotorState = 'RUNNING';
+  // Current State (Initialized in STOPPED Standby until user presses Start button)
+  private currentMotorState: MotorState = 'STOPPED';
   // Dual Temperature Sensors (Head Drive End & Tail Idler End)
-  private currentTempHead: number = 35.4;
-  private currentTempTail: number = 29.8;
-  private currentVibration: number = 0.32;
+  private currentTempHead: number = 24.5;
+  private currentTempTail: number = 24.2;
+  private currentVibration: number = 0.02;
   private currentDistance: number = 24.5;
   private isObjectDetected: boolean = false;
-  private motorRpm: number = 180;
-  private motorCurrent: number = 1.15;
+  private motorRpm: number = 0;
+  private motorCurrent: number = 0.04;
 
   // Metrics
   private metrics: ConveyorMetrics = {
-    total_objects_counted: 14,
-    throughput_cpm: 6.2,
-    running_hours: 18.4,
+    total_objects_counted: 0,
+    throughput_cpm: 0.0,
+    running_hours: 0.0,
     estop_active: false,
     last_fault_reason: null,
     last_command_origin: 'LOCAL_SIM',
@@ -75,20 +81,20 @@ export class TelemetryService {
     const now = Date.now();
     for (let i = this.maxHistoryLength; i >= 0; i--) {
       const timeOffset = now - i * 1000;
-      const tHead = +(34.5 + Math.sin(i * 0.1) * 1.1).toFixed(1);
-      const tTail = +(29.2 + Math.cos(i * 0.08) * 0.7).toFixed(1);
+      const tHead = +(24.5 + Math.sin(i * 0.05) * 0.1).toFixed(1);
+      const tTail = +(24.2 + Math.cos(i * 0.05) * 0.1).toFixed(1);
       const point: TelemetryPoint = {
         timestamp: timeOffset,
         timeFormatted: new Date(timeOffset).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
         temperature_head_c: tHead,
         temperature_tail_c: tTail,
         temperature_c: Math.max(tHead, tTail),
-        vibration_rms_g: +(0.31 + (Math.random() * 0.06 - 0.03)).toFixed(2),
+        vibration_rms_g: +(0.02 + (Math.random() * 0.01)).toFixed(2),
         ultrasonic_distance_cm: 24.5,
         object_detected: false,
-        motor_state: 'RUNNING',
-        motor_speed_rpm: 180,
-        motor_current_a: 1.18,
+        motor_state: 'STOPPED',
+        motor_speed_rpm: 0,
+        motor_current_a: 0.04,
         device_id: 'ESP32_CONVEYOR_NODE_01'
       };
       this.history.push(point);
@@ -138,31 +144,42 @@ export class TelemetryService {
     }
   }
 
-  // Graceful Live Backend Detection
+  // Graceful Live Backend Detection (Requires valid JSON, ignores Vite HTML fallback)
   private async checkLiveBackendAvailability() {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 1200);
 
-      const res = await fetch('/api/status', { signal: controller.signal }).catch(() => null);
+      const res = await fetch('/api/status', {
+        signal: controller.signal,
+        headers: { Accept: 'application/json' }
+      }).catch(() => null);
       clearTimeout(timeoutId);
 
-      if (res && res.ok) {
-        this.mode = 'LIVE';
-        this.connectionStatus = 'CONNECTED';
-        this.connectWebSocket();
-      } else {
-        this.mode = 'SIMULATION';
-        this.connectionStatus = 'SIMULATING';
+      const contentType = res?.headers?.get('content-type') || '';
+      if (res && res.ok && contentType.includes('application/json')) {
+        const json = await res.json().catch(() => null);
+        if (json && (json.temperature_c !== undefined || json.device_id !== undefined)) {
+          this.mode = 'LIVE';
+          this.connectionStatus = 'CONNECTED';
+          this.connectWebSocket();
+          this.notifyModeChange();
+          return;
+        }
       }
     } catch {
-      this.mode = 'SIMULATION';
-      this.connectionStatus = 'SIMULATING';
+      // Ignore network errors, stay in simulation mode
     }
+
+    // Default to SIMULATION mode so buttons and digital twin work immediately standalone
+    this.mode = 'SIMULATION';
+    this.connectionStatus = 'SIMULATING';
     this.notifyModeChange();
   }
 
   private connectWebSocket() {
+    // Only connect if in LIVE mode
+    if (this.mode !== 'LIVE') return;
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -201,23 +218,216 @@ export class TelemetryService {
     }
   }
 
+  // ==========================================
+  // WEB SERIAL API (DIRECT USB CONNECTION TO ESP32)
+  // ==========================================
+  public isWebSerialSupported(): boolean {
+    return typeof navigator !== 'undefined' && 'serial' in navigator;
+  }
+
+  public getSerialInfo(): { isConnected: boolean; portName: string | null } {
+    return {
+      isConnected: this.serialPort !== null,
+      portName: this.serialPortInfo,
+    };
+  }
+
+  public async connectWebSerial(baudRate = 115200): Promise<{ success: boolean; message: string }> {
+    if (!this.isWebSerialSupported()) {
+      return {
+        success: false,
+        message: 'Web Serial API is not supported in this browser. Please use Chrome, Edge, or Opera.'
+      };
+    }
+
+    try {
+      const navSerial = (navigator as any).serial;
+      const port = await navSerial.requestPort();
+      await port.open({ baudRate });
+
+      this.serialPort = port;
+      const info = port.getInfo ? port.getInfo() : {};
+      this.serialPortInfo = info.usbVendorId
+        ? `USB Serial (VID: 0x${info.usbVendorId.toString(16).toUpperCase()})`
+        : 'ESP32 COM Port';
+
+      this.mode = 'LIVE';
+      this.connectionStatus = 'CONNECTED';
+      this.metrics.last_command_origin = 'REMOTE_ESP32_ACK';
+      this.notifyModeChange();
+
+      // Pause standalone simulation interval while live USB is active
+      if (this.simulationIntervalId) {
+        clearInterval(this.simulationIntervalId);
+        this.simulationIntervalId = null;
+      }
+
+      this.startSerialReadLoop();
+
+      const now = Date.now();
+      this.notifyAlert({
+        id: `usb-${now}`,
+        timestamp: new Date(now).toLocaleTimeString(),
+        timeUnix: now,
+        severity: 'NORMAL',
+        code: 'NORMAL',
+        sensor: 'SYSTEM',
+        measured_value: 'USB_LIVE',
+        threshold: `${baudRate} BAUD`,
+        description: `ESP32 USB Serial connected on ${this.serialPortInfo}. Streaming real physical hardware telemetry.`,
+        acknowledged: true,
+      });
+
+      return { success: true, message: `Connected to ${this.serialPortInfo}` };
+    } catch (err: any) {
+      console.warn('Web Serial connection cancelled or failed', err);
+      return { success: false, message: err?.message || 'Failed to connect serial port' };
+    }
+  }
+
+  public async disconnectWebSerial(): Promise<void> {
+    this.isSerialReading = false;
+    if (this.serialReader) {
+      try {
+        await this.serialReader.cancel();
+      } catch {}
+      this.serialReader = null;
+    }
+    if (this.serialPort) {
+      try {
+        await this.serialPort.close();
+      } catch {}
+      this.serialPort = null;
+    }
+    this.serialPortInfo = null;
+    this.mode = 'SIMULATION';
+    this.connectionStatus = 'SIMULATING';
+    this.notifyModeChange();
+
+    // Restart simulation loop
+    this.start();
+  }
+
+  private async startSerialReadLoop() {
+    if (!this.serialPort || !this.serialPort.readable) return;
+    this.isSerialReading = true;
+
+    try {
+      const textDecoder = new TextDecoderStream();
+      this.serialPort.readable.pipeTo(textDecoder.writable).catch(() => {});
+      const reader = textDecoder.readable.getReader();
+      this.serialReader = reader;
+
+      let buffer = '';
+
+      while (this.isSerialReading) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) {
+          buffer += value;
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            this.parseSerialLine(trimmed);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Serial read error:', err);
+    } finally {
+      this.isSerialReading = false;
+    }
+  }
+
+  private parseSerialLine(line: string) {
+    try {
+      // Format 1: Direct JSON payload
+      if (line.startsWith('{') && line.endsWith('}')) {
+        const data = JSON.parse(line);
+        this.handleLiveTelemetryPayload(data);
+        return;
+      }
+
+      // Format 2: CSV fallback (tempHead,tempTail,vibration,distance,rpm,motorState)
+      if (line.includes(',')) {
+        const p = line.split(',').map(s => s.trim());
+        if (p.length >= 4) {
+          const tHead = parseFloat(p[0]);
+          const tTail = parseFloat(p[1]);
+          const vib = parseFloat(p[2]);
+          const dist = parseFloat(p[3]);
+          const rpm = p.length > 4 ? parseFloat(p[4]) : 0;
+          this.handleLiveTelemetryPayload({
+            temperature_head_c: isNaN(tHead) ? undefined : tHead,
+            temperature_tail_c: isNaN(tTail) ? undefined : tTail,
+            vibration_rms_g: isNaN(vib) ? undefined : vib,
+            ultrasonic_distance_cm: isNaN(dist) ? undefined : dist,
+            motor_speed_rpm: isNaN(rpm) ? undefined : rpm,
+            motor_state: rpm > 10 ? 'RUNNING' : 'STOPPED',
+            object_detected: dist <= this.thresholds.ultrasonic_trigger_cm
+          });
+          return;
+        }
+      }
+    } catch {
+      // Ignore corrupted serial bytes during hotplug
+    }
+  }
+
+  public async sendSerialCommand(command: string) {
+    if (!this.serialPort || !this.serialPort.writable) return;
+    try {
+      const encoder = new TextEncoder();
+      const writer = this.serialPort.writable.getWriter();
+      await writer.write(encoder.encode(command + '\n'));
+      writer.releaseLock();
+    } catch (err) {
+      console.warn('Failed to write to serial port', err);
+    }
+  }
+
   private handleLiveTelemetryPayload(data: Partial<TelemetryPoint>) {
     if (this.mode !== 'LIVE') return;
     const now = Date.now();
     const tHead = data.temperature_head_c ?? (data.temperature_c ?? this.currentTempHead);
     const tTail = data.temperature_tail_c ?? this.currentTempTail;
+
+    this.currentTempHead = tHead;
+    this.currentTempTail = tTail;
+    if (data.vibration_rms_g !== undefined) this.currentVibration = data.vibration_rms_g;
+    if (data.ultrasonic_distance_cm !== undefined) this.currentDistance = data.ultrasonic_distance_cm;
+    if (data.object_detected !== undefined) this.isObjectDetected = data.object_detected;
+    if (data.motor_state !== undefined) this.currentMotorState = data.motor_state;
+    if (data.motor_speed_rpm !== undefined) this.motorRpm = data.motor_speed_rpm;
+    if (data.motor_current_a !== undefined) this.motorCurrent = data.motor_current_a;
+
+    // Track objects counted
+    if (this.isObjectDetected && !this.lastObjectRegistered) {
+      this.metrics.total_objects_counted += 1;
+      this.lastObjectRegistered = true;
+      this.notifyMetrics();
+    } else if (!this.isObjectDetected) {
+      this.lastObjectRegistered = false;
+    }
+
+    // Evaluate hardware safety interlocks
+    this.evaluateAutomaticSafetyTrips();
+
     const point: TelemetryPoint = {
       timestamp: data.timestamp || now,
       timeFormatted: new Date(data.timestamp || now).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       temperature_head_c: tHead,
       temperature_tail_c: tTail,
       temperature_c: Math.max(tHead, tTail),
-      vibration_rms_g: data.vibration_rms_g ?? this.currentVibration,
-      ultrasonic_distance_cm: data.ultrasonic_distance_cm ?? this.currentDistance,
-      object_detected: !!data.object_detected,
-      motor_state: data.motor_state ?? this.currentMotorState,
-      motor_speed_rpm: data.motor_speed_rpm ?? this.motorRpm,
-      motor_current_a: data.motor_current_a ?? this.motorCurrent,
+      vibration_rms_g: this.currentVibration,
+      ultrasonic_distance_cm: this.currentDistance,
+      object_detected: this.isObjectDetected,
+      motor_state: this.currentMotorState,
+      motor_speed_rpm: this.motorRpm,
+      motor_current_a: this.motorCurrent,
       device_id: data.device_id || 'ESP32_CONVEYOR_NODE_01'
     };
     this.recordTelemetryPoint(point);
@@ -542,10 +752,34 @@ export class TelemetryService {
     }
 
     this.currentMotorState = 'RUNNING';
+    this.motorRpm = 180;
+    this.motorCurrent = 1.15;
+    this.currentVibration = 0.32;
     this.metrics.last_command_origin = this.mode === 'LIVE' ? 'REMOTE_ESP32_ACK' : 'LOCAL_SIM';
     this.notifyMetrics();
 
+    if (this.serialPort) {
+      this.sendSerialCommand('{"cmd":"START"}');
+    }
+
     const now = Date.now();
+    // Push immediate point so UI updates instantaneously
+    const startPoint: TelemetryPoint = {
+      timestamp: now,
+      timeFormatted: new Date(now).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      temperature_head_c: this.currentTempHead,
+      temperature_tail_c: this.currentTempTail,
+      temperature_c: Math.max(this.currentTempHead, this.currentTempTail),
+      vibration_rms_g: this.currentVibration,
+      ultrasonic_distance_cm: this.currentDistance,
+      object_detected: this.isObjectDetected,
+      motor_state: 'RUNNING',
+      motor_speed_rpm: this.motorRpm,
+      motor_current_a: this.motorCurrent,
+      device_id: 'ESP32_CONVEYOR_NODE_01'
+    };
+    this.recordTelemetryPoint(startPoint);
+
     this.notifyAlert({
       id: `alert-${now}`,
       timestamp: new Date(now).toLocaleTimeString(),
@@ -565,10 +799,34 @@ export class TelemetryService {
   public stopConveyor(reason = 'Operator Manual Stop'): { success: boolean; message: string } {
     soundManager.playClick();
     this.currentMotorState = 'STOPPED';
+    this.motorRpm = 0;
+    this.motorCurrent = 0.04;
+    this.currentVibration = 0.02;
     this.metrics.last_command_origin = this.mode === 'LIVE' ? 'REMOTE_ESP32_ACK' : 'LOCAL_SIM';
     this.notifyMetrics();
 
+    if (this.serialPort) {
+      this.sendSerialCommand('{"cmd":"STOP"}');
+    }
+
     const now = Date.now();
+    // Push immediate point so UI updates instantaneously
+    const stopPoint: TelemetryPoint = {
+      timestamp: now,
+      timeFormatted: new Date(now).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      temperature_head_c: this.currentTempHead,
+      temperature_tail_c: this.currentTempTail,
+      temperature_c: Math.max(this.currentTempHead, this.currentTempTail),
+      vibration_rms_g: this.currentVibration,
+      ultrasonic_distance_cm: this.currentDistance,
+      object_detected: this.isObjectDetected,
+      motor_state: 'STOPPED',
+      motor_speed_rpm: 0,
+      motor_current_a: this.motorCurrent,
+      device_id: 'ESP32_CONVEYOR_NODE_01'
+    };
+    this.recordTelemetryPoint(stopPoint);
+
     this.notifyAlert({
       id: `alert-${now}`,
       timestamp: new Date(now).toLocaleTimeString(),
@@ -587,6 +845,9 @@ export class TelemetryService {
 
   public emergencyStop(): void {
     this.metrics.estop_active = true;
+    if (this.serialPort) {
+      this.sendSerialCommand('{"cmd":"ESTOP"}');
+    }
     this.triggerMotorTrip(
       'ESTOP_TRIGGERED',
       'EMERGENCY STOP BUTTON ENGAGED! Immediate hard interlock shutdown triggered.',
@@ -602,13 +863,20 @@ export class TelemetryService {
     this.sensorOfflineTarget = null;
     this.metrics.estop_active = false;
     this.metrics.last_fault_reason = null;
-    this.currentTempHead = 34.2;
-    this.currentTempTail = 29.4;
-    this.currentVibration = 0.32;
+    this.currentTempHead = 24.5;
+    this.currentTempTail = 24.2;
+    this.currentVibration = 0.02;
     this.currentDistance = 24.5;
+    this.motorRpm = 0;
+    this.motorCurrent = 0.04;
+    this.simulatedBoxPosition = 0;
     this.currentMotorState = 'STOPPED';
     this.metrics.last_command_origin = 'LOCAL_SIM';
     this.notifyMetrics();
+
+    if (this.serialPort) {
+      this.sendSerialCommand('{"cmd":"RESET"}');
+    }
 
     const now = Date.now();
     this.notifyAlert({

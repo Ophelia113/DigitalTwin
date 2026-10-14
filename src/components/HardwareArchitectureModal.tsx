@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Cpu,
@@ -23,7 +23,17 @@ export const HardwareArchitectureModal: React.FC<HardwareArchitectureModalProps>
   onClose,
 }) => {
   const [copiedTab, setCopiedTab] = useState<string | null>(null);
-  const [activeSubTab, setActiveSubTab] = useState<'PINOUT' | 'API' | 'SAFETY' | 'FIRMWARE'>('PINOUT');
+  const [activeSubTab, setActiveSubTab] = useState<'USB_GUIDE' | 'PINOUT' | 'API' | 'SAFETY' | 'FIRMWARE'>('USB_GUIDE');
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    if (isOpen) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -48,8 +58,14 @@ export const HardwareArchitectureModal: React.FC<HardwareArchitectureModalProps>
 }`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
-      <div className="bg-slate-900 border border-slate-700/80 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden font-mono">
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-slate-900 border border-slate-700/80 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden font-mono"
+      >
         {/* Header */}
         <div className="p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -75,6 +91,16 @@ export const HardwareArchitectureModal: React.FC<HardwareArchitectureModalProps>
 
         {/* Tab Navigation */}
         <div className="flex bg-slate-950/60 border-b border-slate-800 px-4 pt-2 gap-2 text-xs overflow-x-auto">
+          <button
+            onClick={() => setActiveSubTab('USB_GUIDE')}
+            className={`px-3 py-2 border-b-2 font-medium transition-all ${
+              activeSubTab === 'USB_GUIDE'
+                ? 'border-cyan-400 text-cyan-300'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            🔌 USB Cable Connection & Arduino Code
+          </button>
           <button
             onClick={() => setActiveSubTab('PINOUT')}
             className={`px-3 py-2 border-b-2 font-medium transition-all ${
@@ -119,6 +145,75 @@ export const HardwareArchitectureModal: React.FC<HardwareArchitectureModalProps>
 
         {/* Body Content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs text-slate-300">
+          {activeSubTab === 'USB_GUIDE' && (
+            <div className="space-y-4">
+              {/* How it works banner */}
+              <div className="p-3.5 bg-cyan-950/40 border border-cyan-500/50 rounded-xl space-y-2">
+                <span className="text-cyan-300 font-bold text-sm block flex items-center gap-2">
+                  <span>How to Stream Data from ESP32 to This Website via USB Cable</span>
+                </span>
+                <p className="text-slate-300 text-[11px] leading-relaxed">
+                  When you connect the ESP32 to your PC using a micro-USB or USB-C cable, it creates a virtual COM port. 
+                  This website utilizes the modern <strong>Web Serial API</strong> (supported natively in <strong>Google Chrome, Microsoft Edge, and Opera</strong>) to read your ESP32 serial data directly inside the browser—with zero backend, zero cloud setup, and zero drivers needed!
+                </p>
+              </div>
+
+              {/* 3 Step Quickstart */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-1.5">
+                  <span className="text-cyan-400 font-bold block">Step 1: Flash Firmware</span>
+                  <p className="text-[11px] text-slate-400">
+                    Open <code className="text-slate-200">esp32/conveyor_esp32_firmware.ino</code> in Arduino IDE. Install <em>OneWire</em> & <em>DallasTemperature</em> libraries, select <strong>ESP32 Dev Module</strong>, and click <strong>Upload</strong>.
+                  </p>
+                </div>
+
+                <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-1.5">
+                  <span className="text-emerald-400 font-bold block">Step 2: Connect in Browser</span>
+                  <p className="text-[11px] text-slate-400">
+                    In Chrome or Edge, click the <strong>Connect ESP32 (USB)</strong> button in the top navigation bar. Select your ESP32's COM port (e.g. CP2102 or CH340) and click <strong>Connect</strong>.
+                  </p>
+                </div>
+
+                <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-1.5">
+                  <span className="text-amber-400 font-bold block">Step 3: See Live Twin!</span>
+                  <p className="text-[11px] text-slate-400">
+                    The dashboard instantly switches to <strong>LIVE USB</strong> mode! Temperatures, vibration, ultrasonic distance, and motor state will now reflect your real physical hardware!
+                  </p>
+                </div>
+              </div>
+
+              {/* JSON Packet Format */}
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-200 font-bold">USB Serial JSON Format (Printed by ESP32 at 115200 Baud):</span>
+                  <button
+                    onClick={() => copyToClipboard(sampleJsonTelemetry, 'json')}
+                    className="flex items-center gap-1 text-[11px] text-cyan-400 hover:text-cyan-300"
+                  >
+                    {copiedTab === 'json' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>Copy JSON</span>
+                  </button>
+                </div>
+                <pre className="bg-slate-900 p-2.5 rounded border border-slate-800 text-[11px] text-cyan-300 overflow-x-auto">
+{`Serial.println("{\\"temperature_head_c\\":35.4,\\"temperature_tail_c\\":29.8,\\"vibration_rms_g\\":0.32,\\"ultrasonic_distance_cm\\":24.5,\\"object_detected\\":false,\\"motor_state\\":\\"RUNNING\\",\\"motor_speed_rpm\\":180,\\"motor_current_a\\":1.15}");`}
+                </pre>
+                <p className="text-[10px] text-slate-400">
+                  * Note: The website also supports comma-separated fallback format: <code className="text-slate-200">tempHead,tempTail,vibration,distance,rpm</code>.
+                </p>
+              </div>
+
+              {/* Two-Way Control */}
+              <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+                <span className="text-purple-400 font-bold block mb-1">Two-Way Command Loop (Website &rarr; ESP32):</span>
+                <p className="text-[11px] text-slate-400">
+                  When you click <strong>Start Conveyor</strong>, <strong>Stop Conveyor</strong>, or <strong>Emergency Stop</strong> on the website, it sends commands back down the USB cable:
+                  <br />
+                  <code className="text-slate-200">{"{\"cmd\":\"START\"}"}</code>, <code className="text-slate-200">{"{\"cmd\":\"STOP\"}"}</code>, <code className="text-slate-200">{"{\"cmd\":\"ESTOP\"}"}</code>, <code className="text-slate-200">{"{\"cmd\":\"RESET\"}"}</code>.
+                  Your ESP32 firmware executes the motor shutdown or activation immediately!
+                </p>
+              </div>
+            </div>
+          )}
           {activeSubTab === 'PINOUT' && (
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

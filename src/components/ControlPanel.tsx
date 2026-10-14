@@ -52,9 +52,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
               : motorState === 'FAULT'
               ? 'bg-rose-500/10 text-rose-300 border border-rose-500/30 animate-pulse'
-              : 'bg-slate-800 text-slate-400'
+              : 'bg-amber-500/10 text-amber-300 border border-amber-500/30'
           }`}>
-            {motorState === 'RUNNING' ? 'Running' : motorState === 'FAULT' ? 'Tripped (Safe)' : 'Stopped'}
+            {motorState === 'RUNNING' ? '● Running' : motorState === 'FAULT' ? 'Tripped (Safe)' : '○ Standby (Stopped)'}
           </span>
         </div>
 
@@ -80,7 +80,15 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           </div>
         )}
 
-        {/* Main Simple Action Buttons */}
+        {/* Standby Prompt when Stopped */}
+        {motorState === 'STOPPED' && (
+          <div className="p-2.5 bg-emerald-950/30 border border-emerald-500/40 rounded-lg mb-3.5 flex items-center gap-2 text-xs text-emerald-200">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
+            <span>Simulation is in Standby. Press <strong>Start Conveyor</strong> to begin.</span>
+          </div>
+        )}
+
+        {/* Main Action Buttons */}
         <div className="grid grid-cols-2 gap-3 mb-4">
           {/* 1. START */}
           <button
@@ -91,7 +99,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
                 : motorState === 'FAULT'
                 ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-950/40 active:scale-95'
+                : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-500/30 ring-2 ring-emerald-400/50 active:scale-95 animate-pulse'
             }`}
           >
             <Play className="w-4 h-4 fill-current" />
@@ -117,10 +125,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         <div className="bg-slate-950/70 p-3.5 rounded-xl border border-slate-800 mb-3">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-slate-200">
-              Demonstration Feature
-            </span>
-            <span className="text-[10px] text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
-              For Project Viva
+              Safety Interlock Demonstration
             </span>
           </div>
 
@@ -149,24 +154,41 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         </button>
 
         {showMoreTests && (
-          <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-slate-800/60 animate-fadeIn text-xs">
+          <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-slate-800/60 animate-fadeIn text-xs">
             <button
               onClick={() => onInjectFault('OVERHEAT_TAIL')}
-              className="p-2 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-300 text-[11px] text-center"
+              className="p-2.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-orange-500/50 rounded-lg text-slate-200 text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
             >
-              Overheat Tail
+              <Flame className="w-3.5 h-3.5 text-orange-400" />
+              <span>Overheat Tail Roller</span>
             </button>
             <button
               onClick={() => onInjectFault('VIBRATION')}
-              className="p-2 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-300 text-[11px] text-center"
+              className="p-2.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-purple-500/50 rounded-lg text-slate-200 text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
             >
-              High Vibration
+              <Waves className="w-3.5 h-3.5 text-purple-400" />
+              <span>Bearing Vibration Trip</span>
+            </button>
+            <button
+              onClick={() => onInjectFault('OBJECT_PASS')}
+              className="p-2.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/50 rounded-lg text-slate-200 text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Pass Box Under Sonar</span>
+            </button>
+            <button
+              onClick={onResetDemo}
+              className="p-2.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-cyan-500/50 rounded-lg text-slate-200 text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Reset to Baseline</span>
             </button>
             <button
               onClick={onEmergencyStop}
-              className="p-2 bg-rose-950/60 hover:bg-rose-900/60 border border-rose-800 rounded text-rose-300 text-[11px] text-center font-bold"
+              className="col-span-2 p-2.5 bg-rose-950/70 hover:bg-rose-900/80 border border-rose-700/80 rounded-lg text-rose-200 text-xs flex items-center justify-center gap-2 font-bold shadow-md shadow-rose-950/40 transition-all active:scale-95"
             >
-              Emergency Stop
+              <AlertOctagon className="w-4 h-4 text-rose-400" />
+              <span>EMERGENCY STOP (E-STOP HARD CUTOFF)</span>
             </button>
           </div>
         )}
